@@ -1,0 +1,71 @@
+### IntelliJ IDEA ###
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+*.class
+
+### OS / 일반 ###
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+
+### Python ###
+# 가상환경
+.venv/
+venv/
+ENV/
+env/
+
+# 캐시 / 빌드
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Jupyter / 기타
+.ipynb_checkpoints/
+.pytest_cache/
+.coverage
+htmlcov/
+
+### Java / Spring ###
+# 빌드 산출물
+target/
+build/
+bin/
+.gradle/
+.mvn/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Spring Boot 패키징 파일
+*.war
+*.ear
+*.jar
+
+# 로그
+*.log
+
+# 캐시
+.classpath
+.project
+.settings/
+
+### Gradle ###
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+.gradle-cache/
+*.lock
+
+### 기타 IDE ###
+.vscode/
+*.sublime-project
+*.sublime-workspace
