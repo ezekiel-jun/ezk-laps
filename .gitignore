@@ -1,5 +1,5 @@
 ### IntelliJ IDEA ###
-.idea/**
+# .idea/** -> 다른 환경에서 사용하기 위해 제거
 *.iml
 *.ipr
 *.iws

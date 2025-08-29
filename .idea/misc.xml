@@ -3,6 +3,9 @@
   <component name="Black">
     <option name="sdkName" value="Python 3.11 (ezk-laps)" />
   </component>
+  <component name="FrameworkDetectionExcludesConfiguration">
+    <file type="web" url="file://$PROJECT_DIR$/playground/java/spring-sse-demo" />
+  </component>
   <component name="ProjectRootManager" version="2" languageLevel="JDK_24" project-jdk-name="Python 3.11 (ezk-laps)" project-jdk-type="Python SDK">
     <output url="file://$PROJECT_DIR$/out" />
   </component>

@@ -3,6 +3,9 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/ezk-laps.iml" filepath="$PROJECT_DIR$/ezk-laps.iml" />
+      <module fileurl="file://$PROJECT_DIR$/spring-sse-demo.iml" filepath="$PROJECT_DIR$/spring-sse-demo.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/spring-sse-demo.main.iml" filepath="$PROJECT_DIR$/.idea/modules/spring-sse-demo.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/spring-sse-demo.test.iml" filepath="$PROJECT_DIR$/.idea/modules/spring-sse-demo.test.iml" />
     </modules>
   </component>
 </project>

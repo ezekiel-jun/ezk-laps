@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <title>Coop SSE Demo (POST + fetch stream)</title>
+    <style>
+        body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 20px; }
+        .row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+        label { min-width: 90px; }
+        input, textarea { padding: 8px; font-family: inherit; font-size: 14px; }
+        textarea { width: 100%; height: 120px; }
+        button { padding: 8px 12px; cursor: pointer; }
+        #log { white-space: pre-wrap; border: 1px solid #ddd; padding: 12px; height: 360px; overflow: auto; background: #fafafa; }
+        .muted { color: #6b7280; }
+    </style>
+</head>
+<body>
+<h1>Coop SSE Demo (ReqDTO → ResDTO + 진행 이벤트)</h1>
+
+<div class="row">
+    <label for="endpoint">Endpoint</label>
+    <input id="endpoint" value="/api/coop/run" size="40" />
+</div>
+
+<div class="row">
+    <label for="jobId">jobId</label>
+    <input id="jobId" value="job-1" size="20" />
+</div>
+
+<div class="row" style="align-items:flex-start">
+    <label for="payload" style="margin-top:6px">payload</label>
+    <textarea id="payload">{ "hello": "world" }</textarea>
+</div>
+
+<div class="row">
+    <button id="startBtn">실행</button>
+    <button id="cancelBtn" disabled>취소</button>
+    <span class="muted">※ 표준 EventSource는 GET만 지원하므로, 본 예제는 <b>fetch + ReadableStream</b>으로 SSE를 파싱합니다.</span>
+</div>
+
+<div id="log"></div>
+
+<script>
+    (function() {
+        const $ = (id) => document.getElementById(id);
+        const logBox = $('log');
+
+        function log(line) {
+            const time = new Date().toISOString();
+            logBox.textContent += `[${time}] ${line}\n`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function pretty(obj) {
+            try { return JSON.stringify(obj, null, 2); }
+            catch { return String(obj); }
+        }
+
+        // SSE 파서: \n\n(또는 \r\n\r\n)로 이벤트 구분, event/data/id 필드 처리
+        function parseSseBuffer(buffer) {
+            const events = [];
+            const parts = buffer.split(/\r?\n\r?\n/);
+            // 마지막 조각이 불완전할 수 있으므로 remainder로 남김
+            const remainder = parts.pop();
+
+            for (const part of parts) {
+                if (!part.trim()) continue;
+                const lines = part.split(/\r?\n/);
+                const evt = { event: 'message', data: '', id: undefined };
+                for (const line of lines) {
+                    if (!line) continue;
+                    if (line.startsWith(':')) continue; // comment
+                    if (line.startsWith('event:')) { evt.event = line.slice(6).trim(); continue; }
+                    if (line.startsWith('data:'))  { evt.data += line.slice(5).replace(/^\s/, '') + '\n'; continue; }
+                    if (line.startsWith('id:'))    { evt.id = line.slice(3).trim(); continue; }
+                    // retry, etc. 무시
+                }
+                if (evt.data.endsWith('\n')) evt.data = evt.data.slice(0, -1);
+                events.push(evt);
+            }
+            return { events, remainder };
+        }
+
+        let abortController = null;
+
+        $('startBtn').onclick = async function() {
+            const endpoint = $('endpoint').value.trim() || '/api/coop/run';
+            const jobId = $('jobId').value.trim();
+            let payloadObj;
+
+            try {
+                const payloadText = $('payload').value.trim();
+                // RequestDto: { jobId, payload } 구조에 맞춤
+                payloadObj = { jobId, payload: payloadText ? payloadText : '' };
+            } catch (e) {
+                log('[ERROR] payload 파싱 실패: ' + e.message);
+                return;
+            }
+
+            $('startBtn').disabled = true;
+            $('cancelBtn').disabled = false;
+            log('--- 요청 시작: ' + endpoint + ' ---');
+
+            abortController = new AbortController();
+
+            try {
+                const resp = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'text/event-stream'
+                    },
+                    body: JSON.stringify(payloadObj),
+                    signal: abortController.signal
+                });
+
+                if (!resp.ok || !resp.body) {
+                    log(`[ERROR] 응답 오류: HTTP ${resp.status}`);
+                    $('startBtn').disabled = false;
+                    $('cancelBtn').disabled = true;
+                    return;
+                }
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buf = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buf += decoder.decode(value, { stream: true });
+                    const { events, remainder } = parseSseBuffer(buf);
+                    buf = remainder || '';
+
+                    for (const ev of events) {
+                        handleEvent(ev);
+                    }
+                }
+
+                // 남은 버퍼에 완성된 이벤트가 있다면 처리
+                if (buf) {
+                    const { events } = parseSseBuffer(buf + '\n\n');
+                    for (const ev of events) handleEvent(ev);
+                }
+
+                log('--- 스트림 종료 ---');
+            } catch (e) {
+                if (e.name === 'AbortError') {
+                    log('[INFO] 클라이언트에서 스트림 취소');
+                } else {
+                    log('[ERROR] ' + (e?.message || e));
+                }
+            } finally {
+                $('startBtn').disabled = false;
+                $('cancelBtn').disabled = true;
+                abortController = null;
+            }
+        };
+
+        $('cancelBtn').onclick = function() {
+            if (abortController) {
+                abortController.abort();
+            }
+        };
+
+        function handleEvent(ev) {
+            // ev.event: 'progress' | 'result' | 'error' | 'message'
+            // ev.data: JSON string of EventEnvelope { kind, payload, at }
+            try {
+                const env = JSON.parse(ev.data);
+                if (!env || typeof env !== 'object') {
+                    log(`[${ev.event}] (비JSON) ${ev.data}`);
+                    return;
+                }
+                const { kind, payload, at } = env;
+
+                if (ev.event === 'progress') {
+                    // payload는 ProgressEvent {step, status, message, percent, timestamp}
+                    const p = payload || {};
+                    const pct = (p.percent ?? '') === '' ? '' : ` (${p.percent}%)`;
+                    log(`[progress] [${p.step}] ${p.status}${pct} - ${p.message} @${at}`);
+                    if (p.step === 'end') {
+                        log('--- 서버가 작업 종료를 통지했습니다 ---');
+                    }
+                } else if (ev.event === 'result') {
+                    // payload는 ResponseDto {jobId, result, success}
+                    log(`[result] ${pretty(payload)} @${at}`);
+                } else if (ev.event === 'error') {
+                    log(`[error] ${pretty(payload)} @${at}`);
+                } else {
+                    log(`[${ev.event}] ${pretty(payload)} @${at}`);
+                }
+            } catch (e) {
+                // data가 JSON이 아니거나 파싱 실패
+                log(`[${ev.event}] ${ev.data}`);
+            }
+        }
+    })();
+</script>
+</body>
+</html>
