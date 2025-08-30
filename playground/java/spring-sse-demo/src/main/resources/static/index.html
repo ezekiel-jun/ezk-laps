@@ -2,48 +2,111 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8" />
-    <title>Coop SSE Demo (POST + fetch stream)</title>
+    <title>Coop SSE Demo (상태 표시 포함)</title>
     <style>
-        body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 20px; }
-        .row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
-        label { min-width: 90px; }
-        input, textarea { padding: 8px; font-family: inherit; font-size: 14px; }
-        textarea { width: 100%; height: 120px; }
-        button { padding: 8px 12px; cursor: pointer; }
-        #log { white-space: pre-wrap; border: 1px solid #ddd; padding: 12px; height: 360px; overflow: auto; background: #fafafa; }
-        .muted { color: #6b7280; }
+        :root { --muted:#6b7280; --ok:#16a34a; --warn:#f59e0b; --err:#dc2626; --info:#2563eb; }
+        body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans KR', Arial; padding:20px; }
+        .row { display:flex; gap:12px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+        input, textarea, button { font: inherit; }
+        textarea { width:100%; height:120px; padding:8px; }
+        button { padding:8px 12px; cursor:pointer; }
+        .panel { border:1px solid #e5e7eb; border-radius:10px; padding:14px; }
+        .grid { display:grid; grid-template-columns: 160px 1fr; gap:8px 12px; }
+        .label { color:var(--muted); }
+        .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; border:1px solid #e5e7eb; background:#f9fafb; }
+        .badge.ok { color:#065f46; background:#ecfdf5; border-color:#a7f3d0; }
+        .badge.run { color:#1e3a8a; background:#eff6ff; border-color:#bfdbfe; }
+        .badge.warn { color:#78350f; background:#fffbeb; border-color:#fde68a; }
+        .badge.err { color:#7f1d1d; background:#fef2f2; border-color:#fecaca; }
+        table { width:100%; border-collapse: collapse; }
+        th, td { padding:8px; border-bottom:1px solid #e5e7eb; font-size:14px; text-align:left; }
+        .progress { height:8px; background:#f3f4f6; border-radius:999px; overflow:hidden; }
+        .bar { height:100%; width:0%; background:linear-gradient(90deg, var(--info), #60a5fa); }
+        #log { white-space:pre-wrap; border:1px solid #e5e7eb; padding:12px; height:240px; overflow:auto; background:#fafafa; border-radius:10px; }
+        .hint { color:var(--muted); font-size:12px; }
     </style>
 </head>
 <body>
-<h1>Coop SSE Demo (ReqDTO → ResDTO + 진행 이벤트)</h1>
+<h1>Coop SSE Demo</h1>
 
 <div class="row">
-    <label for="endpoint">Endpoint</label>
-    <input id="endpoint" value="/api/coop/run" size="40" />
+    <label>Endpoint</label>
+    <input id="endpoint" value="/api/coop/run" size="40">
 </div>
-
 <div class="row">
-    <label for="jobId">jobId</label>
-    <input id="jobId" value="job-1" size="20" />
+    <label>jobId</label>
+    <input id="jobId" value="job-1" size="20">
 </div>
-
 <div class="row" style="align-items:flex-start">
-    <label for="payload" style="margin-top:6px">payload</label>
+    <label style="margin-top:6px">payload</label>
     <textarea id="payload">{ "hello": "world" }</textarea>
 </div>
-
 <div class="row">
     <button id="startBtn">실행</button>
     <button id="cancelBtn" disabled>취소</button>
-    <span class="muted">※ 표준 EventSource는 GET만 지원하므로, 본 예제는 <b>fetch + ReadableStream</b>으로 SSE를 파싱합니다.</span>
+    <span class="hint">※ 표준 EventSource는 GET만 지원 → 이 예제는 <b>fetch + ReadableStream</b>으로 SSE를 파싱합니다.</span>
 </div>
 
-<div id="log"></div>
+<!-- 전체 상태 패널 -->
+<div class="panel" style="margin-top:14px;">
+    <div class="grid">
+        <div class="label">Workflow Status</div>
+        <div id="wfStatus"><span class="badge">N/A</span></div>
+
+        <div class="label">Result</div>
+        <div id="wfResult"><span class="badge">N/A</span></div>
+
+        <div class="label">Error</div>
+        <div id="wfError"><span class="badge">N/A</span></div>
+    </div>
+</div>
+
+<!-- 단계별 진행 -->
+<div class="panel" style="margin-top:14px;">
+    <div class="row" style="justify-content:space-between; align-items:center;">
+        <h3 style="margin:0;">단계 진행 상황</h3>
+        <span class="hint">step별 nodeStatus / % / message</span>
+    </div>
+    <table id="stepsTable">
+        <thead>
+        <tr>
+            <th style="width:100px;">Step</th>
+            <th style="width:160px;">Node Status</th>
+            <th style="width:120px;">Progress</th>
+            <th>Message</th>
+            <th style="width:180px;">Updated</th>
+        </tr>
+        </thead>
+        <tbody><!-- JS가 동적 채움 --></tbody>
+    </table>
+</div>
+
+<!-- 로그 -->
+<div class="panel" style="margin-top:14px;">
+    <div class="row" style="justify-content:space-between; align-items:center;">
+        <h3 style="margin:0;">이벤트 로그</h3>
+        <span class="hint">서버에서 온 원시 이벤트 기록</span>
+    </div>
+    <div id="log"></div>
+</div>
 
 <script>
     (function() {
         const $ = (id) => document.getElementById(id);
         const logBox = $('log');
+        let abortController = null;
+
+        const wf = {
+            statusEl: $('wfStatus'),
+            resultEl: $('wfResult'),
+            errorEl: $('wfError'),
+            setStatus(v) { this.statusEl.innerHTML = badge(v, badgeClassForWorkflow(v)); },
+            setResult(v) { this.resultEl.innerHTML = badge(v ?? 'N/A', badgeClassForResult(v)); },
+            setError(v)  { this.errorEl.innerHTML  = badge(v ?? 'N/A', v ? 'err' : ''); }
+        };
+
+        const stepTableBody = $('stepsTable').querySelector('tbody');
+        const stepRows = new Map(); // step -> {row, statusEl, barEl, msgEl, timeEl}
 
         function log(line) {
             const time = new Date().toISOString();
@@ -51,29 +114,46 @@
             logBox.scrollTop = logBox.scrollHeight;
         }
 
-        function pretty(obj) {
-            try { return JSON.stringify(obj, null, 2); }
-            catch { return String(obj); }
+        function badge(text, cls='') {
+            return `<span class="badge ${cls||''}">${escapeHtml(String(text))}</span>`;
         }
 
-        // SSE 파서: \n\n(또는 \r\n\r\n)로 이벤트 구분, event/data/id 필드 처리
+        function badgeClassForWorkflow(s) {
+            if (!s) return '';
+            const v = String(s).toUpperCase();
+            if (v === 'DONE') return 'ok';
+            if (v === 'RUNNING' || v === 'STARTED') return 'run';
+            return '';
+            // 필요 시 CANCELED -> warn 등 확장 가능
+        }
+
+        function badgeClassForResult(r) {
+            if (!r) return '';
+            const v = String(r).toUpperCase();
+            if (v === 'SUCCESS') return 'ok';
+            if (v === 'FAIL') return 'err';
+            return '';
+        }
+
+        function escapeHtml(s) {
+            return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
+        // ============ SSE 파서 ============
         function parseSseBuffer(buffer) {
             const events = [];
             const parts = buffer.split(/\r?\n\r?\n/);
-            // 마지막 조각이 불완전할 수 있으므로 remainder로 남김
             const remainder = parts.pop();
-
             for (const part of parts) {
                 if (!part.trim()) continue;
                 const lines = part.split(/\r?\n/);
-                const evt = { event: 'message', data: '', id: undefined };
+                const evt = { event:'message', data:'', id:undefined };
                 for (const line of lines) {
                     if (!line) continue;
-                    if (line.startsWith(':')) continue; // comment
+                    if (line.startsWith(':')) continue;
                     if (line.startsWith('event:')) { evt.event = line.slice(6).trim(); continue; }
                     if (line.startsWith('data:'))  { evt.data += line.slice(5).replace(/^\s/, '') + '\n'; continue; }
                     if (line.startsWith('id:'))    { evt.id = line.slice(3).trim(); continue; }
-                    // retry, etc. 무시
                 }
                 if (evt.data.endsWith('\n')) evt.data = evt.data.slice(0, -1);
                 events.push(evt);
@@ -81,43 +161,115 @@
             return { events, remainder };
         }
 
-        let abortController = null;
+        function ensureStepRow(step) {
+            if (stepRows.has(step)) return stepRows.get(step);
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+      <td><strong>${escapeHtml(step)}</strong></td>
+      <td class="node"></td>
+      <td>
+        <div class="progress"><div class="bar"></div></div>
+      </td>
+      <td class="msg"></td>
+      <td class="ts"></td>
+    `;
+            stepTableBody.appendChild(tr);
+            const obj = {
+                row: tr,
+                statusEl: tr.querySelector('.node'),
+                barEl: tr.querySelector('.bar'),
+                msgEl: tr.querySelector('.msg'),
+                timeEl: tr.querySelector('.ts')
+            };
+            stepRows.set(step, obj);
+            return obj;
+        }
 
+        function updateStep(step, nodeStatus, percent, message, at) {
+            const r = ensureStepRow(step);
+            r.statusEl.innerHTML = badge(nodeStatus ?? 'N/A', (nodeStatus === 'FINISHED') ? 'ok' : (nodeStatus ? 'run' : ''));
+            const pct = (typeof percent === 'number' && percent >= 0 && percent <= 100) ? percent : 0;
+            r.barEl.style.width = pct + '%';
+            r.msgEl.textContent = message ?? '';
+            r.timeEl.textContent = at ?? new Date().toISOString();
+        }
+
+        // ============ 이벤트 처리 ============
+        function handleEvent(ev) {
+            try {
+                const env = JSON.parse(ev.data);         // { kind, payload, at }
+                const { payload, at } = env || {};
+
+                if (ev.event === 'progress') {
+                    // ProgressEvent { step, workflowProgressStatus, nodeProgressStatus, result, errorCode, message, percent, timestamp }
+                    const p = payload || {};
+                    // 상단 배지 갱신
+                    if (p.workflowProgressStatus) wf.setStatus(p.workflowProgressStatus);
+                    if (p.result) wf.setResult(p.result);
+                    if (p.errorCode) wf.setError(p.errorCode);
+
+                    // 단계 갱신
+                    if (p.step) {
+                        updateStep(p.step, p.nodeProgressStatus, p.percent, p.message, at);
+                    }
+
+                    // 로그
+                    const pct = (p.percent ?? '') === '' ? '' : ` (${p.percent}%)`;
+                    log(`[progress] step=${p.step} wf=${p.workflowProgressStatus} node=${p.nodeProgressStatus}${pct} result=${p.result ?? ''} err=${p.errorCode ?? ''} - ${p.message} @${at}`);
+
+                    // 종료 알림
+                    if (p.step === 'end' && (p.workflowProgressStatus === 'DONE' || p.result === 'SUCCESS')) {
+                        log('--- 서버가 작업 종료를 통지했습니다 ---');
+                    }
+                    return;
+                }
+
+                if (ev.event === 'result') {
+                    // ResponseDto { jobId, result, success }
+                    wf.setResult((payload && payload.success) ? 'SUCCESS' : 'FAIL');
+                    log(`[result] ${JSON.stringify(payload, null, 2)} @${at}`);
+                    return;
+                }
+
+                if (ev.event === 'error') {
+                    wf.setError((payload && payload.errorCode) ? payload.errorCode : 'ERROR');
+                    log(`[error] ${JSON.stringify(payload, null, 2)} @${at}`);
+                    return;
+                }
+
+                log(`[${ev.event}] ${JSON.stringify(payload, null, 2)} @${at}`);
+            } catch (e) {
+                log(`[${ev.event}] ${ev.data}`);
+            }
+        }
+
+        // ============ 버튼 핸들러 ============
         $('startBtn').onclick = async function() {
             const endpoint = $('endpoint').value.trim() || '/api/coop/run';
             const jobId = $('jobId').value.trim();
-            let payloadObj;
+            const payloadText = $('payload').value.trim();
 
-            try {
-                const payloadText = $('payload').value.trim();
-                // RequestDto: { jobId, payload } 구조에 맞춤
-                payloadObj = { jobId, payload: payloadText ? payloadText : '' };
-            } catch (e) {
-                log('[ERROR] payload 파싱 실패: ' + e.message);
-                return;
-            }
-
-            $('startBtn').disabled = true;
-            $('cancelBtn').disabled = false;
+            // 초기화
+            wf.setStatus('STARTED');
+            wf.setResult('N/A');
+            wf.setError(null);
+            stepTableBody.innerHTML = '';
             log('--- 요청 시작: ' + endpoint + ' ---');
 
             abortController = new AbortController();
+            $('startBtn').disabled = true;
+            $('cancelBtn').disabled = false;
 
             try {
                 const resp = await fetch(endpoint, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'text/event-stream'
-                    },
-                    body: JSON.stringify(payloadObj),
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+                    body: JSON.stringify({ jobId, payload: payloadText }),
                     signal: abortController.signal
                 });
 
                 if (!resp.ok || !resp.body) {
                     log(`[ERROR] 응답 오류: HTTP ${resp.status}`);
-                    $('startBtn').disabled = false;
-                    $('cancelBtn').disabled = true;
                     return;
                 }
 
@@ -128,29 +280,21 @@
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
-
                     buf += decoder.decode(value, { stream: true });
                     const { events, remainder } = parseSseBuffer(buf);
                     buf = remainder || '';
-
-                    for (const ev of events) {
-                        handleEvent(ev);
-                    }
+                    for (const e of events) handleEvent(e);
                 }
 
-                // 남은 버퍼에 완성된 이벤트가 있다면 처리
                 if (buf) {
                     const { events } = parseSseBuffer(buf + '\n\n');
-                    for (const ev of events) handleEvent(ev);
+                    for (const e of events) handleEvent(e);
                 }
 
                 log('--- 스트림 종료 ---');
             } catch (e) {
-                if (e.name === 'AbortError') {
-                    log('[INFO] 클라이언트에서 스트림 취소');
-                } else {
-                    log('[ERROR] ' + (e?.message || e));
-                }
+                if (e.name === 'AbortError') log('[INFO] 클라이언트에서 스트림 취소');
+                else log('[ERROR] ' + (e?.message || e));
             } finally {
                 $('startBtn').disabled = false;
                 $('cancelBtn').disabled = true;
@@ -159,43 +303,8 @@
         };
 
         $('cancelBtn').onclick = function() {
-            if (abortController) {
-                abortController.abort();
-            }
+            if (abortController) abortController.abort();
         };
-
-        function handleEvent(ev) {
-            // ev.event: 'progress' | 'result' | 'error' | 'message'
-            // ev.data: JSON string of EventEnvelope { kind, payload, at }
-            try {
-                const env = JSON.parse(ev.data);
-                if (!env || typeof env !== 'object') {
-                    log(`[${ev.event}] (비JSON) ${ev.data}`);
-                    return;
-                }
-                const { kind, payload, at } = env;
-
-                if (ev.event === 'progress') {
-                    // payload는 ProgressEvent {step, status, message, percent, timestamp}
-                    const p = payload || {};
-                    const pct = (p.percent ?? '') === '' ? '' : ` (${p.percent}%)`;
-                    log(`[progress] [${p.step}] ${p.status}${pct} - ${p.message} @${at}`);
-                    if (p.step === 'end') {
-                        log('--- 서버가 작업 종료를 통지했습니다 ---');
-                    }
-                } else if (ev.event === 'result') {
-                    // payload는 ResponseDto {jobId, result, success}
-                    log(`[result] ${pretty(payload)} @${at}`);
-                } else if (ev.event === 'error') {
-                    log(`[error] ${pretty(payload)} @${at}`);
-                } else {
-                    log(`[${ev.event}] ${pretty(payload)} @${at}`);
-                }
-            } catch (e) {
-                // data가 JSON이 아니거나 파싱 실패
-                log(`[${ev.event}] ${ev.data}`);
-            }
-        }
     })();
 </script>
 </body>

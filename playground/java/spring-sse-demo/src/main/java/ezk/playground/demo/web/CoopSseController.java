@@ -2,9 +2,15 @@ package ezk.playground.demo.web;
 
 import ezk.playground.demo.CoopService;
 import ezk.playground.demo.web.dto.*;
+import ezk.playground.demo.web.type.NodeProgressStatus;
+import ezk.playground.demo.web.type.Result;
+import ezk.playground.demo.web.type.WorkflowProgressStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
@@ -41,14 +47,32 @@ public class CoopSseController {
             Mono.fromCallable(() -> coopService.run(req, reporter))
                     .subscribeOn(Schedulers.boundedElastic())
                     .doOnSuccess((ResponseDto res) -> {
-                        sink.next(sse("result", "result", res)); // 최종 결과 DTO 1회
+                        // 최종 결과 알림
+                        sink.next(sse("result", "result", res));
+                        // 워크플로 종료 알림
                         sink.next(sse("progress", "progress",
-                                      ProgressEvent.of("end", "DONE", "모든 작업 종료", 100)));
+                                      ProgressEvent.of(
+                                              "end",
+                                              WorkflowProgressStatus.DONE,
+                                              NodeProgressStatus.FINISHED,
+                                              Result.SUCCESS,
+                                              null,
+                                              "모든 작업 종료",
+                                              100
+                                      )));
                         sink.complete();
                     })
                     .doOnError(ex -> {
-                        sink.next(sse("error", "error",
-                                      ProgressEvent.of("error", "ERROR", "오류: " + ex.getMessage(), null)));
+                        sink.next(sse("progress", "progress",
+                                      ProgressEvent.of(
+                                              "error",
+                                              WorkflowProgressStatus.RUNNING,
+                                              NodeProgressStatus.FINISHED,
+                                              Result.FAIL,
+                                              "E_RUNTIME",
+                                              "오류: " + ex.getMessage(),
+                                              null
+                                      )));
                         sink.complete();
                     })
                     .subscribe();
